@@ -1,4 +1,10 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["./src/plugin.ts"]
+  "plugin": ["./src/plugin.ts"],
+  "command": {
+    "voice": {
+      "template": "voice {{args}}",
+      "description": "Toggle or set voice reply on/off (e.g. /voice on, /voice off, /voice)"
+    }
+  }
 }

@@ -3,3 +3,5 @@ dist/
 *.js
 *.d.ts
 .DS_Store
+.env
+.Rhistory

@@ -1,34 +1,36 @@
-export function summarize(text: string, maxChars = 280): string {
-  let clean = text
+import { summarizeDeterministic } from "./summarize-deterministic"
+import { summarizeWithLLM } from "./summarize-llm"
 
-  clean = clean.replace(/```[\s\S]*?```/g, " ")
-  clean = clean.replace(/`[^`]*`/g, " ")
+const VERBATIM_THRESHOLD = Number(process.env.OCODE_VOICE_VERBATIM_THRESHOLD) || 220
 
-  clean = clean.replace(/^#{1,6}\s+/gm, "")
-  clean = clean.replace(/^\s*[-*+]\s+/gm, "")
-  clean = clean.replace(/^\s*\d+\.\s+/gm, "")
+export async function summarize(text: string): Promise<string> {
+  const trimmed = text.trim()
+  if (!trimmed) return ""
 
-  clean = clean.replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
-  clean = clean.replace(/\[[^\]]*\]\([^)]*\)/g, " ")
-
-  clean = clean.replace(/@\S+/g, " ")
-
-  clean = clean.replace(/\n{2,}/g, "\n")
-  clean = clean.replace(/\s+/g, " ").trim()
-
-  const sentences = clean.match(/[^.!?]+[.!?]+/g)
-  if (sentences) {
-    let result = ""
-    for (const s of sentences) {
-      if ((result + s).length > maxChars) break
-      result += s
-    }
-    result = result.trim()
-    if (result) return result
+  if (trimmed.length <= VERBATIM_THRESHOLD) {
+    return summarizeDeterministic(trimmed, VERBATIM_THRESHOLD)
   }
 
-  if (clean.length <= maxChars) return clean
-  const cut = clean.slice(0, maxChars)
-  const lastSpace = cut.lastIndexOf(" ")
-  return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trim()
+  const backend = process.env.OCODE_VOICE_SUMMARIZER ?? "llm"
+
+  if (backend === "deterministic") {
+    return summarizeDeterministic(trimmed)
+  }
+
+  if (backend === "llm") {
+    const baseUrl = process.env.OCODE_VOICE_OLLAMA_URL ?? "https://api.ollama.com"
+    const model = process.env.OCODE_VOICE_OLLAMA_MODEL ?? "mistral-large-3:675b"
+    const token = process.env.OCODE_VOICE_OLLAMA_TOKEN
+    const timeoutMs = Number(process.env.OCODE_VOICE_OLLAMA_TIMEOUT) || 10000
+
+    try {
+      return await summarizeWithLLM(trimmed, { baseUrl, model, token, timeoutMs })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[voice-reply] LLM summarizer failed (${msg}), falling back to deterministic`)
+      return summarizeDeterministic(trimmed)
+    }
+  }
+
+  return summarizeDeterministic(trimmed)
 }

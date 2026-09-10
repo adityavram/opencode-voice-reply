@@ -6,12 +6,16 @@
   "main": "src/plugin.ts",
   "scripts": {
     "build": "tsc",
-    "test": "echo \"no tests yet\""
+    "test": "node --import ./test/register-hooks.mjs --test --experimental-strip-types test/*.test.ts",
+    "test:unit": "node --import ./test/register-hooks.mjs --test --experimental-strip-types test/summarize-deterministic.test.ts test/summarize-llm.test.ts test/summarize.test.ts",
+    "test:timing": "node --import ./test/register-hooks.mjs --test --experimental-strip-types test/llm-timing.test.ts"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "*"
   },
   "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "@types/node": "^26.5.0",
     "typescript": "^5.5.0"
   },
   "license": "MIT"

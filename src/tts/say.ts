@@ -1,4 +1,8 @@
+let currentProc: ReturnType<typeof Bun.spawn> | null = null
+
 export async function speak(text: string): Promise<void> {
+  stop()
+
   const voice = process.env.OCODE_VOICE_NAME ?? "Samantha"
   const rate = process.env.OCODE_VOICE_RATE
 
@@ -8,5 +12,21 @@ export async function speak(text: string): Promise<void> {
   if (rate) cmd += ` -r ${rate}`
   cmd += ` "${safe}"`
 
-  await Bun.$`${{ raw: cmd }}`
+  const proc = Bun.spawn(["sh", "-c", cmd], { stdout: "ignore", stderr: "ignore" })
+  currentProc = proc
+
+  try {
+    await proc.exited
+  } finally {
+    if (currentProc === proc) currentProc = null
+  }
+}
+
+export function stop(): void {
+  if (currentProc) {
+    try {
+      currentProc.kill("SIGTERM")
+    } catch {}
+    currentProc = null
+  }
 }
