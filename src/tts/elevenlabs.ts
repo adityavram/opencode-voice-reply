@@ -11,14 +11,14 @@ export async function speak(text: string): Promise<void> {
   const apiKey = process.env.ELEVENLABS_API_KEY
   if (!apiKey) throw new Error("ELEVENLABS_API_KEY is not set")
 
-  const voiceId = process.env.ELEVENLABS_VOICE_ID ?? DEFAULT_VOICE
-  const model = process.env.ELEVENLABS_MODEL ?? DEFAULT_MODEL
-  const format = process.env.ELEVENLABS_FORMAT ?? DEFAULT_FORMAT
-  const latencyTier = process.env.ELEVENLABS_LATENCY_TIER
-  const stability = process.env.ELEVENLABS_STABILITY
-  const similarityBoost = process.env.ELEVENLABS_SIMILARITY_BOOST
-  const style = process.env.ELEVENLABS_STYLE
-  const speakerBoost = process.env.ELEVENLABS_SPEAKER_BOOST
+  const voiceId = process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_VOICE
+  const model = process.env.ELEVENLABS_MODEL?.trim() || DEFAULT_MODEL
+  const format = process.env.ELEVENLABS_FORMAT?.trim() || DEFAULT_FORMAT
+  const latencyTier = process.env.ELEVENLABS_LATENCY_TIER?.trim() || undefined
+  const stability = process.env.ELEVENLABS_STABILITY?.trim() || undefined
+  const similarityBoost = process.env.ELEVENLABS_SIMILARITY_BOOST?.trim() || undefined
+  const style = process.env.ELEVENLABS_STYLE?.trim() || undefined
+  const speakerBoost = process.env.ELEVENLABS_SPEAKER_BOOST?.trim() || undefined
 
   const controller = new AbortController()
   const timeoutMs = Number(process.env.ELEVENLABS_TIMEOUT) || DEFAULT_TIMEOUT_MS

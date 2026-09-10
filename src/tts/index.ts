@@ -4,7 +4,7 @@ import { speak as speakEleven, stop as stopEleven } from "./elevenlabs"
 export type SpeakFn = (text: string) => Promise<void>
 
 export async function speak(text: string): Promise<void> {
-  const backend = process.env.OCODE_VOICE_TTS ?? "elevenlabs"
+  const backend = process.env.OCODE_VOICE_TTS?.trim() || "elevenlabs"
 
   switch (backend) {
     case "say":
@@ -19,7 +19,7 @@ export async function speak(text: string): Promise<void> {
 }
 
 export function stop(): void {
-  const backend = process.env.OCODE_VOICE_TTS ?? "elevenlabs"
+  const backend = process.env.OCODE_VOICE_TTS?.trim() || "elevenlabs"
 
   switch (backend) {
     case "say":

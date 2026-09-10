@@ -11,16 +11,16 @@ export async function summarize(text: string): Promise<string> {
     return summarizeDeterministic(trimmed, VERBATIM_THRESHOLD)
   }
 
-  const backend = process.env.OCODE_VOICE_SUMMARIZER ?? "llm"
+  const backend = process.env.OCODE_VOICE_SUMMARIZER?.trim() || "llm"
 
   if (backend === "deterministic") {
     return summarizeDeterministic(trimmed)
   }
 
   if (backend === "llm") {
-    const baseUrl = process.env.OCODE_VOICE_OLLAMA_URL ?? "https://api.ollama.com"
-    const model = process.env.OCODE_VOICE_OLLAMA_MODEL ?? "mistral-large-3:675b"
-    const token = process.env.OCODE_VOICE_OLLAMA_TOKEN
+    const baseUrl = process.env.OCODE_VOICE_OLLAMA_URL?.trim() || "https://api.ollama.com"
+    const model = process.env.OCODE_VOICE_OLLAMA_MODEL?.trim() || "mistral-large-3:675b"
+    const token = process.env.OCODE_VOICE_OLLAMA_TOKEN?.trim() || undefined
     const timeoutMs = Number(process.env.OCODE_VOICE_OLLAMA_TIMEOUT) || 10000
 
     try {

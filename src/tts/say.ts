@@ -3,8 +3,8 @@ let currentProc: ReturnType<typeof Bun.spawn> | null = null
 export async function speak(text: string): Promise<void> {
   stop()
 
-  const voice = process.env.OCODE_VOICE_NAME ?? "Samantha"
-  const rate = process.env.OCODE_VOICE_RATE
+  const voice = process.env.OCODE_VOICE_NAME?.trim() || "Samantha"
+  const rate = process.env.OCODE_VOICE_RATE?.trim() || undefined
 
   const safe = text.replace(/"/g, '\\"')
 
