@@ -1,13 +1,15 @@
 import { synthesize } from "../tts/elevenlabs"
 import { getNgrokUrl, startAudioServer } from "./audio-server"
-import { placeCall, getCallStatus, getTwilioConfig, sendSMS, type CallResult, type TwilioConfig } from "./twilio"
+import { placeCall, getCallStatus, getTwilioConfig, type CallResult, type TwilioConfig } from "./twilio"
+import { sendNtfy, isNtfyConfigured } from "./ntfy"
 import { summarize } from "../summarize"
 import { classifyUrgency, type Urgency } from "./urgency"
 import { info, debug, warn, error as logError } from "../log"
 
 export { getNgrokUrl } from "./audio-server"
-export { isTwilioConfigured, sendSMS } from "./twilio"
+export { isTwilioConfigured } from "./twilio"
 export { classifyUrgency, type Urgency } from "./urgency"
+export { isNtfyConfigured, sendNtfy } from "./ntfy"
 
 const PING_PREFIX = "opencode needs your attention. "
 
@@ -42,27 +44,16 @@ export interface PingResult {
   userResponse: string | null
 }
 
-export async function smsPhone(text: string): Promise<{ sid: string; status: string }> {
-  const twilioConfig = getTwilioConfig()
-  if (!twilioConfig) {
-    throw new Error("Twilio is not configured — set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, TWILIO_TO_NUMBER")
-  }
-
+export async function textPing(text: string): Promise<void> {
   let message = text.trim()
-  if (!message) throw new Error("SMS text is empty")
+  if (!message) throw new Error("text ping message is empty")
 
   if (!message.toLowerCase().startsWith("opencode needs")) {
     message = PING_PREFIX + message
   }
 
-  if (message.length > 1600) {
-    message = message.slice(0, 1597) + "..."
-  }
-
-  info("ping", "sending SMS ping", { messageLength: message.length })
-  const result = await sendSMS(message, twilioConfig)
-  info("ping", "SMS sent", { sid: result.sid })
-  return result
+  await sendNtfy(message, "opencode")
+  info("ping", "text ping sent via ntfy")
 }
 
 export async function pingPhone(opts: PingOptions): Promise<PingResult> {
@@ -185,7 +176,6 @@ export interface EscalationResult {
   smsSent: boolean
   callEscalated: boolean
   callResult?: PingResult
-  smsSid?: string
 }
 
 export async function pingWithEscalation(opts: EscalationOptions): Promise<EscalationResult> {
@@ -206,16 +196,17 @@ export async function pingWithEscalation(opts: EscalationOptions): Promise<Escal
     smsText = PING_PREFIX + smsText
   }
 
-  let smsResult: { sid: string; status: string } | null = null
+  let smsResult = false
   try {
-    smsResult = await smsPhone(smsText)
+    await textPing(smsText)
+    smsResult = true
   } catch (err) {
-    logError("ping", `escalation SMS failed: ${err instanceof Error ? err.message : String(err)}`)
+    logError("ping", `escalation text ping failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 
   if (urgency === "low") {
-    info("ping", "low urgency — SMS sent, no escalation")
-    return { urgency, smsSent: smsResult !== null, callEscalated: false, smsSid: smsResult?.sid }
+    info("ping", "low urgency — text sent, no escalation")
+    return { urgency, smsSent: smsResult, callEscalated: false }
   }
 
   info("ping", `high urgency — SMS sent, waiting ${escalationTimeoutMs}ms before escalating to call`)
@@ -225,7 +216,7 @@ export async function pingWithEscalation(opts: EscalationOptions): Promise<Escal
   const ngrokUrl = getNgrokUrl()
   if (!ngrokUrl) {
     warn("ping", "cannot escalate to call — ngrok URL not set")
-    return { urgency, smsSent: smsResult !== null, callEscalated: false, smsSid: smsResult?.sid }
+    return { urgency, smsSent: smsResult, callEscalated: false }
   }
 
   info("ping", "escalating to phone call")
@@ -236,10 +227,10 @@ export async function pingWithEscalation(opts: EscalationOptions): Promise<Escal
       sessionId: opts.sessionId,
       client: opts.client,
     })
-    return { urgency, smsSent: smsResult !== null, callEscalated: true, callResult, smsSid: smsResult?.sid }
+    return { urgency, smsSent: smsResult, callEscalated: true, callResult }
   } catch (err) {
     logError("ping", `escalation call failed: ${err instanceof Error ? err.message : String(err)}`)
-    return { urgency, smsSent: smsResult !== null, callEscalated: false, smsSid: smsResult?.sid }
+    return { urgency, smsSent: smsResult, callEscalated: false }
   }
 }
 

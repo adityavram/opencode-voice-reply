@@ -9,7 +9,7 @@ loadPluginEnv()
 import { summarize } from "./summarize"
 import { speak, stop } from "./tts"
 import { isVoiceDisabled, toggleVoice, setVoiceDisabled, isPingDisabled, togglePing, setPingDisabled, getPingMode, setPingMode, type PingMode } from "./state"
-import { pingPhone, smsPhone, pingWithEscalation, getNgrokUrl, isTwilioConfigured } from "./ping"
+import { pingPhone, textPing, pingWithEscalation, getNgrokUrl, isTwilioConfigured, isNtfyConfigured } from "./ping"
 import { info, debug, warn, error as logError } from "./log"
 
 const WILLOW_RECORDINGS_DIR = path.join(
@@ -76,7 +76,7 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
 
         if (arg === "sms" || arg === "text") {
           setPingMode("sms")
-          const message = `Ping mode set to SMS.${isPingDisabled() ? " Ping is currently disabled — use /ping on to enable." : ""}`
+          const message = `Ping mode set to text (ntfy).${isPingDisabled() ? " Ping is currently disabled — use /ping on to enable." : ""}${!isNtfyConfigured() ? " WARNING: set OCODE_VOICE_NTFY_TOPIC in .env" : ""}`
           output.parts.push({ type: "text", text: message } as any)
           await client.tui.showToast({ body: { title: "Phone Ping", message, variant: "info" } })
           return
@@ -92,9 +92,12 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
 
         if (arg === "escalate" || arg === "auto") {
           setPingMode("escalate")
-          let message = `Ping mode set to escalate (SMS first, call if high urgency).${isPingDisabled() ? " Ping is currently disabled — use /ping on to enable." : ""}`
+          let message = `Ping mode set to escalate (text first, call if high urgency).${isPingDisabled() ? " Ping is currently disabled — use /ping on to enable." : ""}`
           if (!getNgrokUrl()) {
-            message += ` WARNING: missing OCODE_VOICE_NGROK_URL — escalation to call won't work. SMS will still send.`
+            message += ` WARNING: missing OCODE_VOICE_NGROK_URL — escalation to call won't work. Text will still send.`
+          }
+          if (!isNtfyConfigured()) {
+            message += ` WARNING: set OCODE_VOICE_NTFY_TOPIC in .env for text ping.`
           }
           output.parts.push({ type: "text", text: message } as any)
           await client.tui.showToast({ body: { title: "Phone Ping", message, variant: "info" } })
@@ -121,13 +124,22 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
         message += ` Mode: ${mode}.`
 
         if (enabled) {
-          const twilioOk = isTwilioConfigured()
-          if (!twilioOk) {
-            message += ` WARNING: missing TWILIO_* credentials — ping will fail until configured.`
+          if (mode === "sms") {
+            if (!isNtfyConfigured()) {
+              message += ` WARNING: set OCODE_VOICE_NTFY_TOPIC in .env for text ping.`
+            }
           } else if (mode === "call" || mode === "escalate") {
-            const ngrokOk = getNgrokUrl() !== null
-            if (!ngrokOk) {
-              message += ` WARNING: missing OCODE_VOICE_NGROK_URL — call${mode === "escalate" ? "/escalation" : ""} needs ngrok. Use /ping sms for text-only mode.`
+            const twilioOk = isTwilioConfigured()
+            if (!twilioOk) {
+              message += ` WARNING: missing TWILIO_* credentials — call${mode === "escalate" ? "/escalation" : ""} needs Twilio.`
+            } else {
+              const ngrokOk = getNgrokUrl() !== null
+              if (!ngrokOk) {
+                message += ` WARNING: missing OCODE_VOICE_NGROK_URL — call${mode === "escalate" ? "/escalation" : ""} needs ngrok.`
+              }
+            }
+            if (mode === "escalate" && !isNtfyConfigured()) {
+              message += ` WARNING: set OCODE_VOICE_NTFY_TOPIC for text ping (escalation sends text first).`
             }
           }
         }
@@ -170,18 +182,20 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
 
         const mode = getPingMode()
         const twilioOk = isTwilioConfigured()
+        const ntfyOk = isNtfyConfigured()
+        const canPingMode = mode === "sms" ? ntfyOk : (mode === "call" || mode === "escalate") ? twilioOk : false
 
-        if (!isPingDisabled() && twilioOk && !pingInFlight) {
+        if (!isPingDisabled() && canPingMode && !pingInFlight) {
           if (mode === "sms") {
-            info("plugin", "permission prompt — attempting SMS ping")
+            info("plugin", "permission prompt — attempting text ping (ntfy)")
             pingInFlight = true
             try {
-              await smsPhone(`I need permission. ${permDesc}`)
+              await textPing(`I need permission. ${permDesc}`)
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err)
-              logError("plugin", `SMS ping failed, falling back to local speech: ${msg}`)
+              logError("plugin", `text ping failed, falling back to local speech: ${msg}`)
               await client.app.log({
-                body: { service: "voice-reply", level: "error", message: `SMS ping failed, falling back to local speech: ${msg}` },
+                body: { service: "voice-reply", level: "error", message: `text ping failed, falling back to local speech: ${msg}` },
               })
               try { if (!isVoiceDisabled()) await speak(`I need permission. ${permDesc}`) } catch {}
             } finally {
@@ -191,7 +205,7 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
           }
 
           if (mode === "escalate") {
-            info("plugin", "permission prompt — attempting escalation ping (SMS + possible call)")
+            info("plugin", "permission prompt — attempting escalation ping (text + possible call)")
             pingInFlight = true
             try {
               await pingWithEscalation({
@@ -243,9 +257,11 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
 
         if (isPingDisabled()) {
           debug("plugin", "permission prompt — ping disabled, using local speech")
-        } else if (!twilioOk) {
+        } else if (mode === "sms" && !ntfyOk) {
+          debug("plugin", "permission prompt — ntfy not configured, using local speech")
+        } else if ((mode === "call" || mode === "escalate") && !twilioOk) {
           debug("plugin", "permission prompt — Twilio not configured, using local speech")
-        } else if (mode === "call" && !getNgrokUrl()) {
+        } else if ((mode === "call" || mode === "escalate") && !getNgrokUrl()) {
           debug("plugin", "permission prompt — ngrok URL not set, using local speech")
         } else if (pingInFlight) {
           warn("plugin", "permission prompt — ping already in flight, using local speech")
@@ -287,8 +303,10 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
       const pingOnIdle = process.env.OCODE_VOICE_PING_ON_IDLE === "1"
       const mode = getPingMode()
       const twilioOk = isTwilioConfigured()
+      const ntfyOk = isNtfyConfigured()
       const idleDelayMs = Number(process.env.OCODE_VOICE_PING_IDLE_DELAY) || 10_000
-      const canPing = pingOnIdle && !isPingDisabled() && twilioOk && !pingInFlight && (mode === "sms" || mode === "escalate" || (mode === "call" && getNgrokUrl()))
+      const modeConfigured = mode === "sms" ? ntfyOk : (mode === "call" || mode === "escalate") ? twilioOk : false
+      const canPing = pingOnIdle && !isPingDisabled() && modeConfigured && !pingInFlight && (mode === "sms" || mode === "escalate" || (mode === "call" && getNgrokUrl()))
 
       if (canPing) {
         if (idlePingTimer) {
@@ -328,7 +346,7 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
             try {
               if (mode === "sms") {
                 const summary = await summarize(fullText)
-                await smsPhone(summary || fullText)
+                await textPing(summary || fullText)
               } else if (mode === "escalate") {
                 await pingWithEscalation({
                   text: fullText,
