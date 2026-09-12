@@ -11,7 +11,7 @@ export { isTwilioConfigured } from "./twilio"
 export { classifyUrgency, type Urgency } from "./urgency"
 export { isTelegramConfigured, sendTelegram, waitForTelegramReply, clearTelegramUpdates } from "./telegram"
 
-const PING_PREFIX = "opencode: "
+const PING_PREFIX = "OpenCode: "
 
 export interface PingClient {
   session: {
