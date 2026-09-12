@@ -9,7 +9,7 @@ import { info, debug, warn, error as logError } from "../log"
 export { getNgrokUrl } from "./audio-server"
 export { isTwilioConfigured } from "./twilio"
 export { classifyUrgency, type Urgency } from "./urgency"
-export { isTelegramConfigured, sendTelegram, waitForTelegramReply } from "./telegram"
+export { isTelegramConfigured, sendTelegram, waitForTelegramReply, clearTelegramUpdates } from "./telegram"
 
 const PING_PREFIX = "opencode needs your attention. "
 
@@ -64,14 +64,14 @@ export async function textPing(opts: TextPingOptions): Promise<TextPingResult> {
     message = PING_PREFIX + message
   }
 
-  await sendTelegram(message)
-  info("ping", "text ping sent via Telegram")
+  const sentMessageId = await sendTelegram(message)
+  info("ping", "text ping sent via Telegram", { messageId: sentMessageId })
 
   if (opts.sessionId && opts.client) {
     const replyTimeoutMs = opts.replyTimeoutMs ?? (Number(process.env.OCODE_VOICE_TEXT_REPLY_TIMEOUT) || 120_000)
     info("ping", `waiting for Telegram reply (timeout ${replyTimeoutMs}ms)`, { sessionId: opts.sessionId })
 
-    const userResponse = await waitForTelegramReply(replyTimeoutMs)
+    const userResponse = await waitForTelegramReply(replyTimeoutMs, sentMessageId)
 
     if (userResponse) {
       info("ping", "Telegram reply received, injecting into session", { response: userResponse.slice(0, 100), sessionId: opts.sessionId })

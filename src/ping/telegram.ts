@@ -27,7 +27,7 @@ export function isTelegramConfigured(): boolean {
 export async function sendTelegram(
   message: string,
   cfg?: TelegramConfig
-): Promise<void> {
+): Promise<number> {
   const c = cfg ?? getTelegramConfig()
   if (!c) throw new Error("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not set")
 
@@ -45,6 +45,7 @@ export async function sendTelegram(
         text: message,
         reply_markup: {
           force_reply: true,
+          selective: true,
           input_field_placeholder: "Reply with your instruction to opencode...",
         },
       }),
@@ -57,11 +58,12 @@ export async function sendTelegram(
     }
 
     const data = await res.json() as { ok: boolean; result?: { message_id: number } }
-    if (!data.ok) {
+    if (!data.ok || !data.result?.message_id) {
       throw new Error(`Telegram returned ok=false: ${JSON.stringify(data)}`)
     }
 
-    info("telegram", `message sent`, { messageId: data.result?.message_id })
+    info("telegram", `message sent`, { messageId: data.result.message_id })
+    return data.result.message_id
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       logError("telegram", `request timed out after ${c.timeoutMs}ms`)
@@ -74,18 +76,50 @@ export async function sendTelegram(
   }
 }
 
+export async function clearTelegramUpdates(cfg?: TelegramConfig): Promise<void> {
+  const c = cfg ?? getTelegramConfig()
+  if (!c) return
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${c.botToken}/getUpdates`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ offset: -1 }),
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (res.ok) {
+      const data = await res.json() as { ok: boolean; result?: Array<{ update_id: number }> }
+      if (data.ok && data.result && data.result.length > 0) {
+        const lastUpdate = data.result[data.result.length - 1].update_id
+        await fetch(`https://api.telegram.org/bot${c.botToken}/getUpdates`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ offset: lastUpdate + 1 }),
+          signal: AbortSignal.timeout(5_000),
+        })
+      }
+      debug("telegram", "pending updates cleared")
+    }
+  } catch (err) {
+    debug("telegram", `clearUpdates failed (non-fatal)`, { error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
 export async function waitForTelegramReply(
   timeoutMs: number,
+  sentMessageId: number,
   cfg?: TelegramConfig
 ): Promise<string | null> {
   const c = cfg ?? getTelegramConfig()
   if (!c) throw new Error("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not set")
 
+  await clearTelegramUpdates(c)
+
   const pollInterval = 3_000
   const startTime = Date.now()
   let offset: number | undefined
 
-  info("telegram", `polling for reply (timeout ${timeoutMs}ms)`)
+  info("telegram", `polling for reply to message ${sentMessageId} (timeout ${timeoutMs}ms)`)
 
   while (Date.now() - startTime < timeoutMs) {
     const remaining = timeoutMs - (Date.now() - startTime)
@@ -127,6 +161,12 @@ export async function waitForTelegramReply(
 
         if (update.message?.chat?.id !== Number(c.chatId)) continue
         if (!update.message.text) continue
+
+        const replyTo = update.message.reply_to_message?.message_id
+        if (replyTo !== sentMessageId) {
+          debug("telegram", `ignoring message not replying to our ping`, { replyTo, expected: sentMessageId })
+          continue
+        }
 
         const text = update.message.text.trim()
         if (!text) continue

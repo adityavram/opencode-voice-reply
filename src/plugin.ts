@@ -9,7 +9,7 @@ loadPluginEnv()
 import { summarize } from "./summarize"
 import { speak, stop } from "./tts"
 import { isVoiceDisabled, toggleVoice, setVoiceDisabled, isPingDisabled, togglePing, setPingDisabled, getPingMode, setPingMode, type PingMode } from "./state"
-import { pingPhone, textPing, pingWithEscalation, getNgrokUrl, isTwilioConfigured, isTelegramConfigured } from "./ping"
+import { pingPhone, textPing, pingWithEscalation, getNgrokUrl, isTwilioConfigured, isTelegramConfigured, clearTelegramUpdates } from "./ping"
 import { info, debug, warn, error as logError } from "./log"
 
 const WILLOW_RECORDINGS_DIR = path.join(
@@ -24,6 +24,11 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
   let activeSessionId: string | undefined
   let pingInFlight = false
   let idlePingTimer: ReturnType<typeof setTimeout> | null = null
+
+  if (isTelegramConfigured()) {
+    clearTelegramUpdates().catch(() => {})
+    info("plugin", "Telegram updates cleared on startup")
+  }
 
   const watcher = tryWatchWillowRecordings(() => {
     const current = listRecordings()
