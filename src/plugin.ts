@@ -9,7 +9,7 @@ loadPluginEnv()
 import { summarize } from "./summarize"
 import { speak, stop } from "./tts"
 import { isVoiceDisabled, toggleVoice, setVoiceDisabled, isPingDisabled, togglePing, setPingDisabled, getPingMode, setPingMode, type PingMode } from "./state"
-import { pingPhone, smsPhone, getNgrokUrl, isTwilioConfigured } from "./ping"
+import { pingPhone, smsPhone, pingWithEscalation, getNgrokUrl, isTwilioConfigured } from "./ping"
 import { info, debug, warn, error as logError } from "./log"
 
 const WILLOW_RECORDINGS_DIR = path.join(
@@ -89,6 +89,17 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
           return
         }
 
+        if (arg === "escalate" || arg === "auto") {
+          setPingMode("escalate")
+          let message = `Ping mode set to escalate (SMS first, call if high urgency).${isPingDisabled() ? " Ping is currently disabled — use /ping on to enable." : ""}`
+          if (!getNgrokUrl()) {
+            message += ` WARNING: missing OCODE_VOICE_NGROK_URL — escalation to call won't work. SMS will still send.`
+          }
+          output.parts.push({ type: "text", text: message } as any)
+          await client.tui.showToast({ body: { title: "Phone Ping", message, variant: "info" } })
+          return
+        }
+
         let enabled: boolean
         let message: string
 
@@ -112,10 +123,10 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
           const twilioOk = isTwilioConfigured()
           if (!twilioOk) {
             message += ` WARNING: missing TWILIO_* credentials — ping will fail until configured.`
-          } else if (mode === "call") {
+          } else if (mode === "call" || mode === "escalate") {
             const ngrokOk = getNgrokUrl() !== null
             if (!ngrokOk) {
-              message += ` WARNING: missing OCODE_VOICE_NGROK_URL — call mode needs ngrok. Use /ping sms for text-only mode.`
+              message += ` WARNING: missing OCODE_VOICE_NGROK_URL — call${mode === "escalate" ? "/escalation" : ""} needs ngrok. Use /ping sms for text-only mode.`
             }
           }
         }
@@ -165,6 +176,29 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
               logError("plugin", `SMS ping failed, falling back to local speech: ${msg}`)
               await client.app.log({
                 body: { service: "voice-reply", level: "error", message: `SMS ping failed, falling back to local speech: ${msg}` },
+              })
+              try { if (!isVoiceDisabled()) await speak(`I need permission. ${permDesc}`) } catch {}
+            } finally {
+              pingInFlight = false
+            }
+            return
+          }
+
+          if (mode === "escalate") {
+            info("plugin", "permission prompt — attempting escalation ping (SMS + possible call)")
+            pingInFlight = true
+            try {
+              await pingWithEscalation({
+                text: `I need permission. ${permDesc}`,
+                summarizeFirst: false,
+                sessionId: permSessionId,
+                client: client as any,
+              })
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err)
+              logError("plugin", `escalation ping failed, falling back to local speech: ${msg}`)
+              await client.app.log({
+                body: { service: "voice-reply", level: "error", message: `escalation ping failed, falling back to local speech: ${msg}` },
               })
               try { if (!isVoiceDisabled()) await speak(`I need permission. ${permDesc}`) } catch {}
             } finally {

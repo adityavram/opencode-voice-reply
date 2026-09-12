@@ -59,14 +59,16 @@ export function togglePing(): boolean {
   return newState
 }
 
-export type PingMode = "call" | "sms"
+export type PingMode = "call" | "sms" | "escalate"
 
 export function getPingMode(): PingMode {
   const env = process.env.OCODE_VOICE_PING_MODE?.trim().toLowerCase()
   if (env === "sms") return "sms"
+  if (env === "escalate") return "escalate"
   try {
     const file = readFileSync(PING_MODE_FILE, "utf8").trim().toLowerCase()
     if (file === "sms") return "sms"
+    if (file === "escalate") return "escalate"
   } catch {}
   return "call"
 }

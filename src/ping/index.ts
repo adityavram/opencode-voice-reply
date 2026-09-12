@@ -2,10 +2,12 @@ import { synthesize } from "../tts/elevenlabs"
 import { getNgrokUrl, startAudioServer } from "./audio-server"
 import { placeCall, getCallStatus, getTwilioConfig, sendSMS, type CallResult, type TwilioConfig } from "./twilio"
 import { summarize } from "../summarize"
+import { classifyUrgency, type Urgency } from "./urgency"
 import { info, debug, warn, error as logError } from "../log"
 
 export { getNgrokUrl } from "./audio-server"
 export { isTwilioConfigured, sendSMS } from "./twilio"
+export { classifyUrgency, type Urgency } from "./urgency"
 
 const PING_PREFIX = "opencode needs your attention. "
 
@@ -168,6 +170,77 @@ export async function pingPhone(opts: PingOptions): Promise<PingResult> {
 
   info("ping", "pingPhone complete", { callSid: call.sid, hadResponse: !!userResponse })
   return { call, summary: spokenText, spokenText, userResponse }
+}
+
+export interface EscalationOptions {
+  text: string
+  summarizeFirst?: boolean
+  sessionId?: string
+  client?: PingClient
+  escalationTimeoutMs?: number
+}
+
+export interface EscalationResult {
+  urgency: Urgency
+  smsSent: boolean
+  callEscalated: boolean
+  callResult?: PingResult
+  smsSid?: string
+}
+
+export async function pingWithEscalation(opts: EscalationOptions): Promise<EscalationResult> {
+  const escalationTimeoutMs = opts.escalationTimeoutMs ?? (Number(process.env.OCODE_VOICE_PING_ESCALATION_TIMEOUT) || 60_000)
+
+  info("ping", "escalation flow started", { textLength: opts.text.length, escalationTimeoutMs })
+
+  const urgency = await classifyUrgency(opts.text)
+  info("ping", `urgency classified: ${urgency}`, { text: opts.text.slice(0, 100) })
+
+  let smsText = opts.text
+  if (opts.summarizeFirst) {
+    const summarized = await summarize(opts.text)
+    if (summarized) smsText = summarized
+  }
+
+  if (!smsText.toLowerCase().startsWith("opencode needs")) {
+    smsText = PING_PREFIX + smsText
+  }
+
+  let smsResult: { sid: string; status: string } | null = null
+  try {
+    smsResult = await smsPhone(smsText)
+  } catch (err) {
+    logError("ping", `escalation SMS failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  if (urgency === "low") {
+    info("ping", "low urgency — SMS sent, no escalation")
+    return { urgency, smsSent: smsResult !== null, callEscalated: false, smsSid: smsResult?.sid }
+  }
+
+  info("ping", `high urgency — SMS sent, waiting ${escalationTimeoutMs}ms before escalating to call`)
+
+  await new Promise((resolve) => setTimeout(resolve, escalationTimeoutMs))
+
+  const ngrokUrl = getNgrokUrl()
+  if (!ngrokUrl) {
+    warn("ping", "cannot escalate to call — ngrok URL not set")
+    return { urgency, smsSent: smsResult !== null, callEscalated: false, smsSid: smsResult?.sid }
+  }
+
+  info("ping", "escalating to phone call")
+  try {
+    const callResult = await pingPhone({
+      text: opts.text,
+      summarizeFirst: opts.summarizeFirst,
+      sessionId: opts.sessionId,
+      client: opts.client,
+    })
+    return { urgency, smsSent: smsResult !== null, callEscalated: true, callResult, smsSid: smsResult?.sid }
+  } catch (err) {
+    logError("ping", `escalation call failed: ${err instanceof Error ? err.message : String(err)}`)
+    return { urgency, smsSent: smsResult !== null, callEscalated: false, smsSid: smsResult?.sid }
+  }
 }
 
 function scheduleCallStatusCleanup(

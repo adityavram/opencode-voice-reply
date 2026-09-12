@@ -7,7 +7,7 @@
     },
     "ping": {
       "template": "ping {{args}}",
-      "description": "Toggle phone ping on/off, or set mode: /ping sms, /ping call, /ping on, /ping off"
+      "description": "Toggle phone ping on/off, or set mode: /ping sms, /ping call, /ping escalate, /ping on, /ping off"
     }
   }
 }
