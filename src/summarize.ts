@@ -1,5 +1,6 @@
 import { summarizeDeterministic } from "./summarize-deterministic"
 import { summarizeWithLLM } from "./summarize-llm"
+import { warn } from "./log"
 
 const VERBATIM_THRESHOLD = Number(process.env.OCODE_VOICE_VERBATIM_THRESHOLD) || 220
 
@@ -27,7 +28,7 @@ export async function summarize(text: string): Promise<string> {
       return await summarizeWithLLM(trimmed, { baseUrl, model, token, timeoutMs })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[voice-reply] LLM summarizer failed (${msg}), falling back to deterministic`)
+      warn("summarize", `LLM summarizer failed (${msg}), falling back to deterministic`)
       return summarizeDeterministic(trimmed)
     }
   }

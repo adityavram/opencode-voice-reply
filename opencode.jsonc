@@ -4,6 +4,10 @@
     "voice": {
       "template": "voice {{args}}",
       "description": "Toggle or set voice reply on/off (e.g. /voice on, /voice off, /voice)"
+    },
+    "ping": {
+      "template": "ping {{args}}",
+      "description": "Toggle or set phone ping on/off (e.g. /ping on, /ping off, /ping)"
     }
   }
 }
