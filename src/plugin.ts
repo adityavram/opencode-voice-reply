@@ -6,7 +6,7 @@ import os from "os"
 import { loadPluginEnv } from "./env"
 loadPluginEnv()
 
-import { summarize } from "./summarize"
+import { summarize, summarizeForText } from "./summarize"
 import { speak, stop } from "./tts"
 import { isVoiceDisabled, toggleVoice, setVoiceDisabled, isPingDisabled, togglePing, setPingDisabled, getPingMode, setPingMode, type PingMode } from "./state"
 import { pingPhone, textPing, pingWithEscalation, getNgrokUrl, isTwilioConfigured, isTelegramConfigured, clearTelegramUpdates } from "./ping"
@@ -354,7 +354,7 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
             pingInFlight = true
             try {
               if (mode === "sms") {
-                const summary = await summarize(fullText)
+                const summary = await summarizeForText(fullText)
                 await textPing({
                   text: summary || fullText,
                   sessionId,

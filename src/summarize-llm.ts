@@ -1,11 +1,19 @@
-const SYSTEM_PROMPT = `Summarize the AI assistant's reply as brief spoken text: 1-2 sentences, max 30 words, first person, plain language. No code, paths, or markdown. Examples:
+const VOICE_SYSTEM_PROMPT = `Summarize the AI assistant's reply as brief spoken text: 1-2 sentences, max 30 words, first person, plain language. No code, paths, or markdown. Examples:
 - "Done. I added speech interruption so hitting Enter stops the voice reply."
 - "That failed — the Ollama server wasn't reachable."
 
 Reply with ONLY the summary. Do not include reasoning or thinking steps.`
 
+const TEXT_SYSTEM_PROMPT = `Summarize the AI assistant's reply as a concise text message: 2-3 sentences, max 60 words, third person, include key outcomes and anything needing user input. No code blocks, no file paths, no markdown. Use plain text. Examples:
+- "Finished adding speech interruption to the voice reply plugin. Tests pass. Needs your review on the interrupt logic in plugin.ts before merging."
+- "Attempted to fix the Ollama timeout but the server is unreachable. The summarizer falls back to deterministic mode. You may need to check if the API key is valid."
+
+Reply with ONLY the summary. Do not include reasoning or thinking steps.`
+
 const DEFAULT_NUM_PREDICT = 200
 const DEFAULT_TIMEOUT_MS = 30000
+
+export type SummaryStyle = "voice" | "text"
 
 export async function summarizeWithLLM(
   text: string,
@@ -14,8 +22,11 @@ export async function summarizeWithLLM(
     model: string
     token?: string
     timeoutMs?: number
+    style?: SummaryStyle
   }
 ): Promise<string> {
+  const systemPrompt = opts.style === "text" ? TEXT_SYSTEM_PROMPT : VOICE_SYSTEM_PROMPT
+  const numPredict = opts.style === "text" ? 300 : DEFAULT_NUM_PREDICT
   const controller = new AbortController()
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
@@ -32,10 +43,10 @@ export async function summarizeWithLLM(
         stream: false,
         options: {
           temperature: 0.3,
-          num_predict: DEFAULT_NUM_PREDICT,
+          num_predict: numPredict,
         },
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: systemPrompt },
           { role: "user", content: text },
         ],
       }),

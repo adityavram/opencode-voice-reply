@@ -2,7 +2,7 @@ import { synthesize } from "../tts/elevenlabs"
 import { getNgrokUrl, startAudioServer } from "./audio-server"
 import { placeCall, getCallStatus, getTwilioConfig, type CallResult, type TwilioConfig } from "./twilio"
 import { sendTelegram, waitForTelegramReply, isTelegramConfigured } from "./telegram"
-import { summarize } from "../summarize"
+import { summarize, summarizeForText } from "../summarize"
 import { classifyUrgency, type Urgency } from "./urgency"
 import { info, debug, warn, error as logError } from "../log"
 
@@ -11,7 +11,7 @@ export { isTwilioConfigured } from "./twilio"
 export { classifyUrgency, type Urgency } from "./urgency"
 export { isTelegramConfigured, sendTelegram, waitForTelegramReply, clearTelegramUpdates } from "./telegram"
 
-const PING_PREFIX = "opencode needs your attention. "
+const PING_PREFIX = "opencode: "
 
 export interface PingClient {
   session: {
@@ -60,7 +60,7 @@ export async function textPing(opts: TextPingOptions): Promise<TextPingResult> {
   let message = opts.text.trim()
   if (!message) throw new Error("text ping message is empty")
 
-  if (!message.toLowerCase().startsWith("opencode needs")) {
+  if (!message.toLowerCase().startsWith("opencode:")) {
     message = PING_PREFIX + message
   }
 
@@ -229,11 +229,11 @@ export async function pingWithEscalation(opts: EscalationOptions): Promise<Escal
 
   let smsText = opts.text
   if (opts.summarizeFirst) {
-    const summarized = await summarize(opts.text)
+    const summarized = await summarizeForText(opts.text)
     if (summarized) smsText = summarized
   }
 
-  if (!smsText.toLowerCase().startsWith("opencode needs")) {
+  if (!smsText.toLowerCase().startsWith("opencode:")) {
     smsText = PING_PREFIX + smsText
   }
 

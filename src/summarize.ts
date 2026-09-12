@@ -1,15 +1,18 @@
 import { summarizeDeterministic } from "./summarize-deterministic"
-import { summarizeWithLLM } from "./summarize-llm"
+import { summarizeWithLLM, type SummaryStyle } from "./summarize-llm"
 import { warn } from "./log"
 
 const VERBATIM_THRESHOLD = Number(process.env.OCODE_VOICE_VERBATIM_THRESHOLD) || 220
+const TEXT_VERBATIM_THRESHOLD = Number(process.env.OCODE_VOICE_TEXT_VERBATIM_THRESHOLD) || 500
 
-export async function summarize(text: string): Promise<string> {
+export async function summarize(text: string, style: SummaryStyle = "voice"): Promise<string> {
   const trimmed = text.trim()
   if (!trimmed) return ""
 
-  if (trimmed.length <= VERBATIM_THRESHOLD) {
-    return summarizeDeterministic(trimmed, VERBATIM_THRESHOLD)
+  const threshold = style === "text" ? TEXT_VERBATIM_THRESHOLD : VERBATIM_THRESHOLD
+
+  if (trimmed.length <= threshold) {
+    return summarizeDeterministic(trimmed, threshold)
   }
 
   const backend = process.env.OCODE_VOICE_SUMMARIZER?.trim() || "llm"
@@ -25,7 +28,7 @@ export async function summarize(text: string): Promise<string> {
     const timeoutMs = Number(process.env.OCODE_VOICE_OLLAMA_TIMEOUT) || 10000
 
     try {
-      return await summarizeWithLLM(trimmed, { baseUrl, model, token, timeoutMs })
+      return await summarizeWithLLM(trimmed, { baseUrl, model, token, timeoutMs, style })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       warn("summarize", `LLM summarizer failed (${msg}), falling back to deterministic`)
@@ -34,4 +37,8 @@ export async function summarize(text: string): Promise<string> {
   }
 
   return summarizeDeterministic(trimmed)
+}
+
+export async function summarizeForText(text: string): Promise<string> {
+  return summarize(text, "text")
 }
