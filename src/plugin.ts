@@ -23,6 +23,7 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
   const knownRecordings = new Set<string>(listRecordings())
   let activeSessionId: string | undefined
   let pingInFlight = false
+  let idlePingTimer: ReturnType<typeof setTimeout> | null = null
 
   const watcher = tryWatchWillowRecordings(() => {
     const current = listRecordings()
@@ -152,6 +153,11 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
         const command = (event.properties as { command?: string }).command
         if (command && INTERRUPT_COMMANDS.has(command)) {
           interruptSpeech(client, `${command} — user interrupted`)
+          if (idlePingTimer) {
+            clearTimeout(idlePingTimer)
+            idlePingTimer = null
+            debug("plugin", "idle ping cancelled — user interrupted")
+          }
         }
         return
       }
@@ -281,56 +287,124 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
       const pingOnIdle = process.env.OCODE_VOICE_PING_ON_IDLE === "1"
       const mode = getPingMode()
       const twilioOk = isTwilioConfigured()
-      const canPing = pingOnIdle && !isPingDisabled() && twilioOk && !pingInFlight && (mode === "sms" || (mode === "call" && getNgrokUrl()))
+      const idleDelayMs = Number(process.env.OCODE_VOICE_PING_IDLE_DELAY) || 300_000
+      const canPing = pingOnIdle && !isPingDisabled() && twilioOk && !pingInFlight && (mode === "sms" || mode === "escalate" || (mode === "call" && getNgrokUrl()))
 
       if (canPing) {
-        try {
-          const messagesRes = await client.session.messages({
-            path: { id: sessionId },
-          })
+        if (idlePingTimer) {
+          clearTimeout(idlePingTimer)
+          idlePingTimer = null
+        }
 
-          const messages = messagesRes.data
-          if (!messages || messages.length === 0) return
+        info("plugin", `idle ping scheduled in ${idleDelayMs}ms`, { mode, sessionId })
 
-          const lastAssistant = [...messages].reverse().find(
-            (m) => m.info?.role === "assistant"
-          )
-          if (!lastAssistant) return
+        idlePingTimer = setTimeout(async () => {
+          idlePingTimer = null
+          if (pingInFlight) {
+            debug("plugin", "idle ping fired but ping already in flight, skipping")
+            return
+          }
 
-          const textParts = (lastAssistant.parts ?? [])
-            .filter((p) => p.type === "text")
-            .map((p) => (p as { type: "text"; text: string }).text)
-          const fullText = textParts.join("\n").trim()
-          if (!fullText) return
-
-          pingInFlight = true
           try {
-            if (mode === "sms") {
-              const summary = await summarize(fullText)
-              await smsPhone(summary || fullText)
-            } else {
-              await pingPhone({
-                text: fullText,
-                summarizeFirst: true,
-                sessionId,
-                client: client as any,
-              })
+            const messagesRes = await client.session.messages({
+              path: { id: sessionId },
+            })
+
+            const messages = messagesRes.data
+            if (!messages || messages.length === 0) return
+
+            const lastAssistant = [...messages].reverse().find(
+              (m) => m.info?.role === "assistant"
+            )
+            if (!lastAssistant) return
+
+            const textParts = (lastAssistant.parts ?? [])
+              .filter((p) => p.type === "text")
+              .map((p) => (p as { type: "text"; text: string }).text)
+            const fullText = textParts.join("\n").trim()
+            if (!fullText) return
+
+            pingInFlight = true
+            try {
+              if (mode === "sms") {
+                const summary = await summarize(fullText)
+                await smsPhone(summary || fullText)
+              } else if (mode === "escalate") {
+                await pingWithEscalation({
+                  text: fullText,
+                  summarizeFirst: true,
+                  sessionId,
+                  client: client as any,
+                })
+              } else {
+                await pingPhone({
+                  text: fullText,
+                  summarizeFirst: true,
+                  sessionId,
+                  client: client as any,
+                })
+              }
+            } finally {
+              pingInFlight = false
             }
-          } finally {
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            await client.app.log({
+              body: {
+                service: "voice-reply",
+                level: "error",
+                message: `idle ping failed: ${msg}`,
+              },
+            })
             pingInFlight = false
           }
-          return
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          await client.app.log({
-            body: {
-              service: "voice-reply",
-              level: "error",
-              message: `ping on idle failed, falling back to local speech: ${msg}`,
-            },
-          })
-          pingInFlight = false
+        }, idleDelayMs)
+
+        if (!isVoiceDisabled()) {
+          try {
+            const messagesRes = await client.session.messages({
+              path: { id: sessionId },
+            })
+
+            const messages = messagesRes.data
+            if (!messages || messages.length === 0) return
+
+            const lastAssistant = [...messages].reverse().find(
+              (m) => m.info?.role === "assistant"
+            )
+            if (!lastAssistant) return
+
+            const textParts = (lastAssistant.parts ?? [])
+              .filter((p) => p.type === "text")
+              .map((p) => (p as { type: "text"; text: string }).text)
+            const fullText = textParts.join("\n").trim()
+            if (!fullText) return
+
+            const summary = await summarize(fullText)
+            if (!summary) return
+
+            await speak(summary)
+
+            await client.tui.showToast({
+              body: {
+                title: "Voice Reply",
+                message: "Spoke summary — turn complete",
+                variant: "success",
+              },
+            })
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            logError("plugin", `voice reply failed: ${message}`)
+            await client.app.log({
+              body: {
+                service: "voice-reply",
+                level: "error",
+                message: `voice reply failed: ${message}`,
+              },
+            })
+          }
         }
+        return
       }
 
       if (isVoiceDisabled()) return
@@ -368,6 +442,7 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
         })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        logError("plugin", `voice reply failed: ${message}`)
         await client.app.log({
           body: {
             service: "voice-reply",
@@ -380,6 +455,10 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
 
     dispose: async () => {
       stop()
+      if (idlePingTimer) {
+        clearTimeout(idlePingTimer)
+        idlePingTimer = null
+      }
       try {
         watcher?.close()
       } catch {}
