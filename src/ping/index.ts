@@ -1,7 +1,7 @@
 import { synthesize } from "../tts/elevenlabs"
 import { getNgrokUrl, startAudioServer } from "./audio-server"
 import { placeCall, getCallStatus, getTwilioConfig, type CallResult, type TwilioConfig } from "./twilio"
-import { sendNtfy, isNtfyConfigured } from "./ntfy"
+import { sendTelegram, waitForTelegramReply, isTelegramConfigured } from "./telegram"
 import { summarize } from "../summarize"
 import { classifyUrgency, type Urgency } from "./urgency"
 import { info, debug, warn, error as logError } from "../log"
@@ -9,7 +9,7 @@ import { info, debug, warn, error as logError } from "../log"
 export { getNgrokUrl } from "./audio-server"
 export { isTwilioConfigured } from "./twilio"
 export { classifyUrgency, type Urgency } from "./urgency"
-export { isNtfyConfigured, sendNtfy } from "./ntfy"
+export { isTelegramConfigured, sendTelegram, waitForTelegramReply } from "./telegram"
 
 const PING_PREFIX = "opencode needs your attention. "
 
@@ -44,16 +44,57 @@ export interface PingResult {
   userResponse: string | null
 }
 
-export async function textPing(text: string): Promise<void> {
-  let message = text.trim()
+export interface TextPingOptions {
+  text: string
+  sessionId?: string
+  client?: PingClient
+  replyTimeoutMs?: number
+}
+
+export interface TextPingResult {
+  sent: boolean
+  userResponse: string | null
+}
+
+export async function textPing(opts: TextPingOptions): Promise<TextPingResult> {
+  let message = opts.text.trim()
   if (!message) throw new Error("text ping message is empty")
 
   if (!message.toLowerCase().startsWith("opencode needs")) {
     message = PING_PREFIX + message
   }
 
-  await sendNtfy(message, "opencode")
-  info("ping", "text ping sent via ntfy")
+  await sendTelegram(message)
+  info("ping", "text ping sent via Telegram")
+
+  if (opts.sessionId && opts.client) {
+    const replyTimeoutMs = opts.replyTimeoutMs ?? (Number(process.env.OCODE_VOICE_TEXT_REPLY_TIMEOUT) || 120_000)
+    info("ping", `waiting for Telegram reply (timeout ${replyTimeoutMs}ms)`, { sessionId: opts.sessionId })
+
+    const userResponse = await waitForTelegramReply(replyTimeoutMs)
+
+    if (userResponse) {
+      info("ping", "Telegram reply received, injecting into session", { response: userResponse.slice(0, 100), sessionId: opts.sessionId })
+      try {
+        await opts.client.session.promptAsync({
+          path: { id: opts.sessionId },
+          body: {
+            parts: [{ type: "text", text: userResponse, synthetic: true }],
+          },
+        })
+        info("ping", "Telegram reply injected successfully")
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        logError("ping", `failed to inject Telegram reply into session: ${msg}`)
+      }
+      return { sent: true, userResponse }
+    }
+
+    warn("ping", "no Telegram reply received within timeout")
+    return { sent: true, userResponse: null }
+  }
+
+  return { sent: true, userResponse: null }
 }
 
 export async function pingPhone(opts: PingOptions): Promise<PingResult> {
@@ -198,8 +239,16 @@ export async function pingWithEscalation(opts: EscalationOptions): Promise<Escal
 
   let smsResult = false
   try {
-    await textPing(smsText)
-    smsResult = true
+    const result = await textPing({
+      text: smsText,
+      sessionId: opts.sessionId,
+      client: opts.client,
+    })
+    smsResult = result.sent
+    if (result.userResponse) {
+      info("ping", "user replied via text, skipping call escalation")
+      return { urgency, smsSent: smsResult, callEscalated: false }
+    }
   } catch (err) {
     logError("ping", `escalation text ping failed: ${err instanceof Error ? err.message : String(err)}`)
   }
