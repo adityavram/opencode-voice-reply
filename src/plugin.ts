@@ -287,7 +287,7 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
       const pingOnIdle = process.env.OCODE_VOICE_PING_ON_IDLE === "1"
       const mode = getPingMode()
       const twilioOk = isTwilioConfigured()
-      const idleDelayMs = Number(process.env.OCODE_VOICE_PING_IDLE_DELAY) || 300_000
+      const idleDelayMs = Number(process.env.OCODE_VOICE_PING_IDLE_DELAY) || 10_000
       const canPing = pingOnIdle && !isPingDisabled() && twilioOk && !pingInFlight && (mode === "sms" || mode === "escalate" || (mode === "call" && getNgrokUrl()))
 
       if (canPing) {
