@@ -5,6 +5,7 @@ import os from "os"
 const STATE_DIR = path.join(os.homedir(), ".config", "opencode", "voice-reply")
 const STATE_FILE = path.join(STATE_DIR, "disabled")
 const PING_STATE_FILE = path.join(STATE_DIR, "ping-disabled")
+const PING_MODE_FILE = path.join(STATE_DIR, "ping-mode")
 
 export function isVoiceDisabled(): boolean {
   if (process.env.OCODE_VOICE_DISABLED === "1") return true
@@ -56,4 +57,21 @@ export function togglePing(): boolean {
   const newState = !isPingDisabled()
   setPingDisabled(newState)
   return newState
+}
+
+export type PingMode = "call" | "sms"
+
+export function getPingMode(): PingMode {
+  const env = process.env.OCODE_VOICE_PING_MODE?.trim().toLowerCase()
+  if (env === "sms") return "sms"
+  try {
+    const file = readFileSync(PING_MODE_FILE, "utf8").trim().toLowerCase()
+    if (file === "sms") return "sms"
+  } catch {}
+  return "call"
+}
+
+export function setPingMode(mode: PingMode): void {
+  if (!existsSync(STATE_DIR)) mkdirSync(STATE_DIR, { recursive: true })
+  writeFileSync(PING_MODE_FILE, mode)
 }

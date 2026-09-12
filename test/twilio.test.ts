@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { placeCall, getTwilioConfig, isTwilioConfigured, getCallStatus } from "../src/ping/twilio.ts";
+import { placeCall, sendSMS, getTwilioConfig, isTwilioConfigured, getCallStatus } from "../src/ping/twilio.ts";
 
 type FetchImpl = typeof fetch;
 
@@ -180,4 +180,80 @@ test("placeCall clears timeout after success (no unhandled rejection)", async ()
     await placeCall("https://example.com/twiml", validConfig);
     await new Promise((r) => setTimeout(r, validConfig.timeoutMs + 100));
   });
+});
+
+test("sendSMS returns sid and status on success", async () => {
+  await withFetch(async () =>
+    jsonRes({ sid: "SM123456", status: "queued" }),
+  async () => {
+    const result = await sendSMS("test message", validConfig);
+    assert.equal(result.sid, "SM123456");
+    assert.equal(result.status, "queued");
+  });
+});
+
+test("sendSMS sends correct URL and body", async () => {
+  let capturedUrl: string | undefined;
+  let capturedBody: string | undefined;
+  await withFetch(async (url, init) => {
+    capturedUrl = url.toString();
+    capturedBody = (init as RequestInit).body as string;
+    return jsonRes({ sid: "SM123", status: "queued" });
+  }, async () => {
+    await sendSMS("hello world", validConfig);
+    assert.ok(capturedUrl!.includes("/Accounts/ACtest123/Messages.json"));
+    const params = new URLSearchParams(capturedBody!);
+    assert.equal(params.get("To"), "+15557654321");
+    assert.equal(params.get("From"), "+15551234567");
+    assert.equal(params.get("Body"), "hello world");
+  });
+});
+
+test("sendSMS throws on non-2xx response", async () => {
+  await withFetch(async () => jsonRes({ error: "bad number" }, 400), async () => {
+    await assert.rejects(
+      () => sendSMS("test", validConfig),
+      /Twilio responded 400/,
+    );
+  });
+});
+
+test("sendSMS throws on missing sid in response", async () => {
+  await withFetch(async () => jsonRes({ status: "queued" }), async () => {
+    await assert.rejects(
+      () => sendSMS("test", validConfig),
+      /missing message SID/,
+    );
+  });
+});
+
+test("sendSMS throws on timeout", async () => {
+  await withFetch(async (_url, init) => {
+    const signal = (init as RequestInit & { signal?: AbortSignal }).signal;
+    if (signal) {
+      return new Promise<Response>((_resolve, reject) => {
+        if (signal.aborted) reject(new DOMException("aborted", "AbortError"));
+        signal.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+      });
+    }
+    return jsonRes({ sid: "SM123" });
+  }, async () => {
+    await assert.rejects(
+      () => sendSMS("test", { ...validConfig, timeoutMs: 50 }),
+      (err: unknown) => err instanceof Error && /timed out after 50ms/.test(err.message),
+    );
+  });
+});
+
+test("sendSMS throws when config is null", async () => {
+  delete process.env.TWILIO_ACCOUNT_SID;
+  delete process.env.TWILIO_AUTH_TOKEN;
+  delete process.env.TWILIO_FROM_NUMBER;
+  delete process.env.TWILIO_TO_NUMBER;
+  await assert.rejects(
+    () => sendSMS("test"),
+    /Twilio is not configured/,
+  );
 });

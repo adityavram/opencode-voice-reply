@@ -1,11 +1,11 @@
 import { synthesize } from "../tts/elevenlabs"
 import { getNgrokUrl, startAudioServer } from "./audio-server"
-import { placeCall, getCallStatus, getTwilioConfig, type CallResult, type TwilioConfig } from "./twilio"
+import { placeCall, getCallStatus, getTwilioConfig, sendSMS, type CallResult, type TwilioConfig } from "./twilio"
 import { summarize } from "../summarize"
 import { info, debug, warn, error as logError } from "../log"
 
 export { getNgrokUrl } from "./audio-server"
-export { isTwilioConfigured } from "./twilio"
+export { isTwilioConfigured, sendSMS } from "./twilio"
 
 const PING_PREFIX = "opencode needs your attention. "
 
@@ -38,6 +38,29 @@ export interface PingResult {
   summary: string
   spokenText: string
   userResponse: string | null
+}
+
+export async function smsPhone(text: string): Promise<{ sid: string; status: string }> {
+  const twilioConfig = getTwilioConfig()
+  if (!twilioConfig) {
+    throw new Error("Twilio is not configured — set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, TWILIO_TO_NUMBER")
+  }
+
+  let message = text.trim()
+  if (!message) throw new Error("SMS text is empty")
+
+  if (!message.toLowerCase().startsWith("opencode needs")) {
+    message = PING_PREFIX + message
+  }
+
+  if (message.length > 1600) {
+    message = message.slice(0, 1597) + "..."
+  }
+
+  info("ping", "sending SMS ping", { messageLength: message.length })
+  const result = await sendSMS(message, twilioConfig)
+  info("ping", "SMS sent", { sid: result.sid })
+  return result
 }
 
 export async function pingPhone(opts: PingOptions): Promise<PingResult> {

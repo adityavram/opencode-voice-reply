@@ -8,8 +8,8 @@ loadPluginEnv()
 
 import { summarize } from "./summarize"
 import { speak, stop } from "./tts"
-import { isVoiceDisabled, toggleVoice, setVoiceDisabled, isPingDisabled, togglePing, setPingDisabled } from "./state"
-import { pingPhone, getNgrokUrl, isTwilioConfigured } from "./ping"
+import { isVoiceDisabled, toggleVoice, setVoiceDisabled, isPingDisabled, togglePing, setPingDisabled, getPingMode, setPingMode, type PingMode } from "./state"
+import { pingPhone, smsPhone, getNgrokUrl, isTwilioConfigured } from "./ping"
 import { info, debug, warn, error as logError } from "./log"
 
 const WILLOW_RECORDINGS_DIR = path.join(
@@ -72,6 +72,23 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
 
       if (input.command === "ping") {
         const arg = input.arguments.trim().toLowerCase()
+
+        if (arg === "sms" || arg === "text") {
+          setPingMode("sms")
+          const message = `Ping mode set to SMS.${isPingDisabled() ? " Ping is currently disabled — use /ping on to enable." : ""}`
+          output.parts.push({ type: "text", text: message } as any)
+          await client.tui.showToast({ body: { title: "Phone Ping", message, variant: "info" } })
+          return
+        }
+
+        if (arg === "call" || arg === "voice") {
+          setPingMode("call")
+          const message = `Ping mode set to call (voice).${isPingDisabled() ? " Ping is currently disabled — use /ping on to enable." : ""}`
+          output.parts.push({ type: "text", text: message } as any)
+          await client.tui.showToast({ body: { title: "Phone Ping", message, variant: "info" } })
+          return
+        }
+
         let enabled: boolean
         let message: string
 
@@ -88,14 +105,18 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
           message = enabled ? "Phone ping enabled." : "Phone ping disabled."
         }
 
+        const mode = getPingMode()
+        message += ` Mode: ${mode}.`
+
         if (enabled) {
-          const ngrokOk = getNgrokUrl() !== null
           const twilioOk = isTwilioConfigured()
-          if (!ngrokOk || !twilioOk) {
-            const missing: string[] = []
-            if (!ngrokOk) missing.push("OCODE_VOICE_NGROK_URL")
-            if (!twilioOk) missing.push("TWILIO_* credentials")
-            message += ` WARNING: missing ${missing.join(", ")} — ping will fail until configured.`
+          if (!twilioOk) {
+            message += ` WARNING: missing TWILIO_* credentials — ping will fail until configured.`
+          } else if (mode === "call") {
+            const ngrokOk = getNgrokUrl() !== null
+            if (!ngrokOk) {
+              message += ` WARNING: missing OCODE_VOICE_NGROK_URL — call mode needs ngrok. Use /ping sms for text-only mode.`
+            }
           }
         }
 
@@ -130,42 +151,61 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
         info("plugin", `permission event: ${event.type}`, { desc: permDesc, sessionId: permSessionId })
         interruptSpeech(client, "permission prompt")
 
-        if (!isPingDisabled() && isTwilioConfigured() && getNgrokUrl() && !pingInFlight) {
-          info("plugin", "permission prompt — attempting phone ping")
-          pingInFlight = true
-          try {
-            await pingPhone({
-              text: `I need permission. ${permDesc}`,
-              summarizeFirst: false,
-              sessionId: permSessionId,
-              client: client as any,
-            })
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err)
-            logError("plugin", `phone ping failed, falling back to local speech: ${msg}`)
-            await client.app.log({
-              body: {
-                service: "voice-reply",
-                level: "error",
-                message: `phone ping failed, falling back to local speech: ${msg}`,
-              },
-            })
+        const mode = getPingMode()
+        const twilioOk = isTwilioConfigured()
+
+        if (!isPingDisabled() && twilioOk && !pingInFlight) {
+          if (mode === "sms") {
+            info("plugin", "permission prompt — attempting SMS ping")
+            pingInFlight = true
             try {
-              if (!isVoiceDisabled()) await speak(`I need permission. ${permDesc}`)
-            } catch (err2) {
-              logError("plugin", `local speech fallback also failed: ${err2 instanceof Error ? err2.message : String(err2)}`)
+              await smsPhone(`I need permission. ${permDesc}`)
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err)
+              logError("plugin", `SMS ping failed, falling back to local speech: ${msg}`)
+              await client.app.log({
+                body: { service: "voice-reply", level: "error", message: `SMS ping failed, falling back to local speech: ${msg}` },
+              })
+              try { if (!isVoiceDisabled()) await speak(`I need permission. ${permDesc}`) } catch {}
+            } finally {
+              pingInFlight = false
             }
-          } finally {
-            pingInFlight = false
+            return
           }
-          return
+
+          if (mode === "call" && getNgrokUrl()) {
+            info("plugin", "permission prompt — attempting phone ping")
+            pingInFlight = true
+            try {
+              await pingPhone({
+                text: `I need permission. ${permDesc}`,
+                summarizeFirst: false,
+                sessionId: permSessionId,
+                client: client as any,
+              })
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err)
+              logError("plugin", `phone ping failed, falling back to local speech: ${msg}`)
+              await client.app.log({
+                body: { service: "voice-reply", level: "error", message: `phone ping failed, falling back to local speech: ${msg}` },
+              })
+              try {
+                if (!isVoiceDisabled()) await speak(`I need permission. ${permDesc}`)
+              } catch (err2) {
+                logError("plugin", `local speech fallback also failed: ${err2 instanceof Error ? err2.message : String(err2)}`)
+              }
+            } finally {
+              pingInFlight = false
+            }
+            return
+          }
         }
 
         if (isPingDisabled()) {
           debug("plugin", "permission prompt — ping disabled, using local speech")
-        } else if (!isTwilioConfigured()) {
+        } else if (!twilioOk) {
           debug("plugin", "permission prompt — Twilio not configured, using local speech")
-        } else if (!getNgrokUrl()) {
+        } else if (mode === "call" && !getNgrokUrl()) {
           debug("plugin", "permission prompt — ngrok URL not set, using local speech")
         } else if (pingInFlight) {
           warn("plugin", "permission prompt — ping already in flight, using local speech")
@@ -205,7 +245,11 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
       }
 
       const pingOnIdle = process.env.OCODE_VOICE_PING_ON_IDLE === "1"
-      if (pingOnIdle && !isPingDisabled() && isTwilioConfigured() && getNgrokUrl() && !pingInFlight) {
+      const mode = getPingMode()
+      const twilioOk = isTwilioConfigured()
+      const canPing = pingOnIdle && !isPingDisabled() && twilioOk && !pingInFlight && (mode === "sms" || (mode === "call" && getNgrokUrl()))
+
+      if (canPing) {
         try {
           const messagesRes = await client.session.messages({
             path: { id: sessionId },
@@ -227,12 +271,17 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
 
           pingInFlight = true
           try {
-            await pingPhone({
-              text: fullText,
-              summarizeFirst: true,
-              sessionId,
-              client: client as any,
-            })
+            if (mode === "sms") {
+              const summary = await summarize(fullText)
+              await smsPhone(summary || fullText)
+            } else {
+              await pingPhone({
+                text: fullText,
+                summarizeFirst: true,
+                sessionId,
+                client: client as any,
+              })
+            }
           } finally {
             pingInFlight = false
           }
@@ -243,7 +292,7 @@ export const VoiceReplyPlugin: Plugin = async ({ client }) => {
             body: {
               service: "voice-reply",
               level: "error",
-              message: `phone ping on idle failed, falling back to local speech: ${msg}`,
+              message: `ping on idle failed, falling back to local speech: ${msg}`,
             },
           })
           pingInFlight = false

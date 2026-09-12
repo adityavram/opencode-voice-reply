@@ -15,6 +15,11 @@ export interface CallResult {
   status: string
 }
 
+export interface SmsResult {
+  sid: string
+  status: string
+}
+
 export function getTwilioConfig(): TwilioConfig | null {
   const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim()
   const authToken = process.env.TWILIO_AUTH_TOKEN?.trim()
@@ -126,5 +131,60 @@ export async function getCallStatus(
   } catch (err) {
     debug("twilio", `getCallStatus failed`, { callSid, error: err instanceof Error ? err.message : String(err) })
     return null
+  }
+}
+
+export async function sendSMS(
+  message: string,
+  config?: TwilioConfig
+): Promise<SmsResult> {
+  const cfg = config ?? getTwilioConfig()
+  if (!cfg) throw new Error("Twilio is not configured — set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, TWILIO_TO_NUMBER")
+
+  const controller = new AbortController()
+  const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${cfg.accountSid}/Messages.json`
+    const body = new URLSearchParams({
+      To: cfg.toNumber,
+      From: cfg.fromNumber,
+      Body: message,
+    })
+
+    info("twilio", `sending SMS to ${cfg.toNumber} from ${cfg.fromNumber}`, { messageLength: message.length })
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${btoa(`${cfg.accountSid}:${cfg.authToken}`)}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: body.toString(),
+      signal: controller.signal,
+    })
+
+    if (!res.ok) {
+      const errBody = await res.text()
+      throw new Error(`Twilio responded ${res.status}: ${errBody}`)
+    }
+
+    const data = (await res.json()) as { sid?: string; status?: string }
+    if (!data.sid) {
+      throw new Error(`Twilio response missing message SID: ${JSON.stringify(data)}`)
+    }
+
+    info("twilio", `SMS sent successfully`, { sid: data.sid, status: data.status })
+    return { sid: data.sid, status: data.status ?? "unknown" }
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      logError("twilio", `SMS request timed out after ${timeoutMs}ms`)
+      throw new Error(`Twilio request timed out after ${timeoutMs}ms`)
+    }
+    logError("twilio", `SMS failed`, { error: err instanceof Error ? err.message : String(err) })
+    throw err
+  } finally {
+    clearTimeout(timeout)
   }
 }
