@@ -21,6 +21,12 @@ export interface PingClient {
         parts: Array<{ type: "text"; text: string; synthetic?: boolean }>
       }
     }) => Promise<unknown>
+    prompt: (options: {
+      path: { id: string }
+      body: {
+        parts: Array<{ type: "text"; text: string; synthetic?: boolean }>
+      }
+    }) => Promise<unknown>
   }
   app: {
     log: (options: { body: { service: string; level: string; message: string } }) => Promise<unknown>
@@ -76,16 +82,28 @@ export async function textPing(opts: TextPingOptions): Promise<TextPingResult> {
     if (userResponse) {
       info("ping", "Telegram reply received, injecting into session", { response: userResponse.slice(0, 100), sessionId: opts.sessionId })
       try {
-        await opts.client.session.promptAsync({
+        const result = await opts.client.session.promptAsync({
           path: { id: opts.sessionId },
           body: {
             parts: [{ type: "text", text: userResponse, synthetic: true }],
           },
         })
-        info("ping", "Telegram reply injected successfully")
+        info("ping", "Telegram reply injected successfully", { result: JSON.stringify(result).slice(0, 200) })
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         logError("ping", `failed to inject Telegram reply into session: ${msg}`)
+        try {
+          const result2 = await opts.client.session.prompt({
+            path: { id: opts.sessionId },
+            body: {
+              parts: [{ type: "text", text: userResponse, synthetic: true }],
+            },
+          })
+          info("ping", "Telegram reply injected via prompt() fallback", { result: JSON.stringify(result2).slice(0, 200) })
+        } catch (err2) {
+          const msg2 = err2 instanceof Error ? err2.message : String(err2)
+          logError("ping", `prompt() fallback also failed: ${msg2}`)
+        }
       }
       return { sent: true, userResponse }
     }
