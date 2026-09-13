@@ -1,8 +1,19 @@
+// ntfy notification client — sends push notifications via ntfy.sh.
+// Implemented and exported but NOT wired into the main ping flow.
+// Kept as an alternative notification channel for future use.
+//
+// Required env vars:
+//   OCODE_VOICE_NTFY_TOPIC — ntfy.sh topic name (choose any unique string)
+// Optional:
+//   OCODE_VOICE_NTFY_URL   — ntfy server URL (default: https://ntfy.sh)
+//   OCODE_VOICE_NTFY_TIMEOUT — request timeout in ms (default: 10000)
+
 import { info, error as logError } from "../log"
 
 const DEFAULT_NTFY_URL = "https://ntfy.sh"
 const DEFAULT_TIMEOUT_MS = 10000
 
+// Read ntfy config from env vars. Returns null if the topic is not set.
 export function getNtfyConfig(): { url: string; topic: string; timeoutMs: number } | null {
   const topic = process.env.OCODE_VOICE_NTFY_TOPIC?.trim()
   if (!topic) return null
@@ -14,10 +25,13 @@ export function getNtfyConfig(): { url: string; topic: string; timeoutMs: number
   }
 }
 
+// Quick check: is ntfy configured (topic set)?
 export function isNtfyConfigured(): boolean {
   return getNtfyConfig() !== null
 }
 
+// Send a push notification via ntfy. The message body is the notification text.
+// An optional title can be set via the Title header.
 export async function sendNtfy(
   message: string,
   title?: string
@@ -31,6 +45,8 @@ export async function sendNtfy(
   try {
     info("ntfy", `sending notification to topic "${cfg.topic}"`, { messageLength: message.length })
 
+    // ntfy uses a simple POST to the topic URL with the message as the body.
+    // Optional Title header sets the notification title.
     const headers: Record<string, string> = {}
     if (title) headers["Title"] = title
 
