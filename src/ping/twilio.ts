@@ -1,20 +1,10 @@
-// Twilio API client — handles placing phone calls, checking call status, and
-// sending SMS messages via Twilio's REST API. Uses HTTP Basic auth with the
-// account SID and auth token.
-//
-// Required env vars for call mode:
-//   TWILIO_ACCOUNT_SID  — Twilio account SID
-//   TWILIO_AUTH_TOKEN   — Twilio auth token
-//   TWILIO_FROM_NUMBER  — Twilio phone number to call from
-//   TWILIO_TO_NUMBER    — Your phone number to call
-// Optional:
-//   TWILIO_TIMEOUT      — request timeout in ms (default: 15000)
+// Twilio API client — places phone calls, checks call status, and sends SMS
+// via Twilio's REST API. Uses HTTP Basic auth with the account SID and auth token.
 
 import { info, error as logError, debug } from "../log"
 
 const DEFAULT_TIMEOUT_MS = 15000
 
-// Validated Twilio configuration loaded from env vars.
 export interface TwilioConfig {
   accountSid: string
   authToken: string
@@ -23,27 +13,22 @@ export interface TwilioConfig {
   timeoutMs?: number
 }
 
-// Result of placing a call — the SID is the unique call identifier.
 export interface CallResult {
   sid: string
   status: string
 }
 
-// Result of sending an SMS — same structure as CallResult.
 export interface SmsResult {
   sid: string
   status: string
 }
 
-// Read and validate Twilio config from env vars.
-// Returns null if any required var is missing (with a debug log of which ones).
 export function getTwilioConfig(): TwilioConfig | null {
   const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim()
   const authToken = process.env.TWILIO_AUTH_TOKEN?.trim()
   const fromNumber = process.env.TWILIO_FROM_NUMBER?.trim()
   const toNumber = process.env.TWILIO_TO_NUMBER?.trim()
 
-  // Check all required vars and log which ones are missing
   if (!accountSid || !authToken || !fromNumber || !toNumber) {
     const missing: string[] = []
     if (!accountSid) missing.push("TWILIO_ACCOUNT_SID")
@@ -63,14 +48,10 @@ export function getTwilioConfig(): TwilioConfig | null {
   }
 }
 
-// Quick check: are all required Twilio env vars set?
 export function isTwilioConfigured(): boolean {
   return getTwilioConfig() !== null
 }
 
-// Place an outbound phone call via Twilio.
-// `twimlUrl` is the URL Twilio will fetch to get the TwiML instructions
-// (typically the ngrok URL pointing to the audio server).
 export async function placeCall(
   twimlUrl: string,
   config?: TwilioConfig
@@ -83,9 +64,7 @@ export async function placeCall(
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    // Twilio Calls API endpoint
     const url = `https://api.twilio.com/2010-04-01/Accounts/${cfg.accountSid}/Calls.json`
-    // POST body: who to call, who to call from, and where to fetch TwiML
     const body = new URLSearchParams({
       To: cfg.toNumber,
       From: cfg.fromNumber,
@@ -97,7 +76,6 @@ export async function placeCall(
     const res = await fetch(url, {
       method: "POST",
       headers: {
-        // Twilio uses HTTP Basic auth with SID:token
         Authorization: `Basic ${btoa(`${cfg.accountSid}:${cfg.authToken}`)}`,
         "Content-Type": "application/x-www-form-urlencoded",
       },
@@ -110,7 +88,6 @@ export async function placeCall(
       throw new Error(`Twilio responded ${res.status}: ${errBody}`)
     }
 
-    // Parse the call SID and status from the response
     const data = (await res.json()) as { sid?: string; status?: string }
     if (!data.sid) {
       throw new Error(`Twilio response missing call SID: ${JSON.stringify(data)}`)
@@ -119,7 +96,6 @@ export async function placeCall(
     info("twilio", `call placed successfully`, { sid: data.sid, status: data.status })
     return { sid: data.sid, status: data.status ?? "unknown" }
   } catch (err) {
-    // Convert AbortError to a clearer timeout message
     if (err instanceof Error && err.name === "AbortError") {
       logError("twilio", `call request timed out after ${timeoutMs}ms`)
       throw new Error(`Twilio request timed out after ${timeoutMs}ms`)
@@ -131,9 +107,6 @@ export async function placeCall(
   }
 }
 
-// Poll the status of a call by its SID.
-// Returns the status string (e.g. "ringing", "in-progress", "completed", "failed")
-// or null if the request fails or Twilio is not configured.
 export async function getCallStatus(
   callSid: string,
   config?: TwilioConfig
@@ -142,7 +115,6 @@ export async function getCallStatus(
   if (!cfg) return null
 
   try {
-    // Twilio Call resource endpoint for a specific call
     const url = `https://api.twilio.com/2010-04-01/Accounts/${cfg.accountSid}/Calls/${callSid}.json`
     const res = await fetch(url, {
       headers: {
@@ -165,9 +137,8 @@ export async function getCallStatus(
   }
 }
 
-// Send an SMS via Twilio Messages API.
-// Implemented and exported but not used by the main ping flow — Telegram is
-// used for text mode instead. Kept for potential future use.
+// Not used by the main ping flow — Telegram is used for text mode instead.
+// Kept for potential future use.
 export async function sendSMS(
   message: string,
   config?: TwilioConfig
@@ -180,7 +151,6 @@ export async function sendSMS(
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    // Twilio Messages API endpoint
     const url = `https://api.twilio.com/2010-04-01/Accounts/${cfg.accountSid}/Messages.json`
     const body = new URLSearchParams({
       To: cfg.toNumber,
